@@ -1,0 +1,32 @@
+// --- DEFINISI TIPE KUSTOM ---
+.type Address <: symbol
+
+// --- DEKLARASI INPUT UNIVERSAL ---
+.decl IncomingEvent(type:symbol, p1:symbol, p2:symbol, p3:symbol, p4:symbol, p5:float, p6:symbol)
+.input IncomingEvent(IO=stdin, delimiter="\t")
+
+// --- MEMBUAT ULANG FAKTA SPESIFIK (Internal) ---
+.decl ETHDepositInitiated(from:Address, to:Address, amount:float, extraData:symbol)
+.decl ERC20DepositInitiated(l1Token:Address, l2Token:Address, from:Address, to:Address, amount:float, extraData:symbol)
+
+ETHDepositInitiated(as(from, Address), as(to, Address), amount, extraData) :-
+    IncomingEvent("ETH", from, to, _, _, amount, extraData).
+
+ERC20DepositInitiated(as(l1Token, Address), as(l2Token, Address), as(from, Address), as(to, Address), amount, extraData) :-
+    IncomingEvent("ERC20", l1Token, l2Token, from, to, amount, extraData).
+
+// --- DEKLARASI OUTPUT ---
+.decl HighValueEthDeposit(from:Address, to:Address, amount:float)
+.output HighValueEthDeposit
+
+.decl SpecificTokenDeposit(token:Address, from:Address, to:Address, amount:float)
+.output SpecificTokenDeposit
+
+// --- ATURAN ANALISIS ---
+HighValueEthDeposit(from, to, amount) :-
+    ETHDepositInitiated(from, to, amount, _),
+    amount >= 50000000000000000000.0. // Batas 50 ETH
+
+SpecificTokenDeposit(token, from, to, amount) :-
+    ERC20DepositInitiated(token, _, from, to, amount, _),
+    token = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2". // Hanya untuk token WETH
