@@ -1,0 +1,11 @@
+**/**/.DS_Store
+
+**/**/.env
+**/**/__pycache__
+**/**/.Rproj.user
+xchainwatcherenv/*
+**/**/.Rhistory
+**/**/.RData
+.vscode/launch.json
+./raw-data/*
+.Rproj.user
