@@ -3,3 +3,4 @@ bridge
 bridge2
 souffle
 alchemy-bridge-monitor-py/
+.venv/
