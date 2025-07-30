@@ -66,13 +66,16 @@ def get_llm_report(souffle_report, event_name, args):
 
         # --- PERUBAHAN: Buat prompt untuk model Chat OpenAI ---
         system_prompt = "Anda adalah seorang analis keamanan blockchain senior."
-        user_prompt = (f"Sebuah alarm keamanan baru saja terpicu.\n\n"
-                       f"*Laporan Teknis dari Sistem Deteksi:*\n{souffle_report}\n\n"
-                       f"*Detail Transaksi Pemicu:*\n{transaction_details}\n\n"
-                       f"Tugas Anda: Berdasarkan dua data di atas, tulis sebuah laporan insiden singkat dalam format berikut:\n"
-                       f"1. *Ringkasan Insiden:* Jelaskan dengan bahasa sederhana apa yang terjadi.\n"
-                       f"2. *Potensi Risiko:* Jelaskan mengapa aktivitas ini dianggap berisiko.\n"
-                       f"3. *Rekomendasi Tindakan:* Berikan satu langkah konkret yang harus segera dilakukan oleh operator.\n")
+        user_prompt =   (f"Sebuah alarm keamanan baru saja terpicu.\n\n"
+                        f"*Laporan Teknis dari Sistem Deteksi:*\n{souffle_report}\n\n"
+                        f"*Detail Transaksi Pemicu:*\n{transaction_details}\n\n"
+                        f"Tugas Anda:\n"
+                        f"Berdasarkan kedua informasi di atas, analisis potensi insiden keamanan. Jika alamat pengirim dan penerima (from dan to) adalah sama, "
+                        f"anggaplah itu sebagai pola umum dalam transaksi bridging dan *tidak otomatis mencurigakan*, kecuali ada indikasi lain (misalnya nilai sangat besar, token tertentu, dst).\n\n"
+                        f"Tuliskan laporan insiden singkat dengan format berikut:\n"
+                        f"1. *Ringkasan Insiden:* Jelaskan dengan bahasa sederhana apa yang terjadi.\n"
+                        f"2. *Potensi Risiko:* Jelaskan mengapa (atau mengapa tidak) aktivitas ini dianggap berisiko.\n"
+                        f"3. *Rekomendasi Tindakan:* Berikan satu langkah konkret yang harus segera dilakukan oleh operator.\n")
 
         # --- PERUBAHAN: Panggil API OpenAI ---
         response = llm_client.chat.completions.create(
@@ -99,17 +102,56 @@ def analyze_with_souffle(fact_string, event_name, args):
              print(f"   [ERROR SOUFFLE]: {result.stderr}")
 
         if result.stdout.strip():
+            report_items = [] # Menyimpan laporan pelanggaran yang valid
+
+            # Memisahkan output menjadi beberapa tabel berdasarkan pemisah '---'
+            tables = result.stdout.strip().split('---------------')
+
+            for table in tables:
+                table = table.strip()
+                if not table:
+                    continue
+
+                lines = table.split('\n')
+                rule_name = lines[0].strip()
+                
+                # Cek jika ada baris data (setelah nama aturan, header, dan '===')
+                if len(lines) > 3:
+                    data_rows = lines[3:] # Data dimulai dari baris ke-4 (setelah nama, header, dan ===)
+                    
+                    # Hanya proses jika ada data nyata
+                    if data_rows and "===" not in data_rows[0]:
+                        report = f"\n   Aturan Terpicu: {rule_name}\n   --- Detail Pelanggaran ---"
+                        
+                        for row in data_rows:
+                            if not row.strip() or "===" in row:
+                                continue
+                                
+                            parts = row.split('\t')
+                            if rule_name == "HighValueEthDeposit" and len(parts) == 3:
+                                from_addr, to_addr, amount_wei_str = parts
+                                amount_eth = Web3.from_wei(int(float(amount_wei_str)), 'ether')
+                                report += (f"\n     - From: {from_addr}\n     - To:   {to_addr}"
+                                           f"\n     - Amount: {amount_eth:.6f} ETH")
+                            elif rule_name == "SpecificTokenDeposit" and len(parts) == 4:
+                                token_addr, from_addr, to_addr, amount_str = parts
+                                report += (f"\n     - Token: {token_addr} (WETH)\n     - From:  {from_addr}"
+                                           f"\n     - To:    {to_addr}\n     - Amount (wei): {int(float(amount_str))}")
+                        report_items.append(report)
             # Cek apakah benar-benar ada data pelanggaran
-            has_violation = "===============" in result.stdout
+            # has_violation = "===============" in result.stdout
             
-            if has_violation:
+            # if has_violation:
+            if report_items:
                 # KONDISI 1: ADA PELANGGARAN ATURAN
                 
                 # Minta LLM untuk membuat laporan
-                llm_report = get_llm_report(result.stdout.strip(), event_name, args)
+                llm_report = get_llm_report(report_items, event_name, args)
 
                 print("\n" + "="*30)
                 print("🚨 LAPORAN INSIDEN (DARI LLM) 🚨")
+                for item in report_items:
+                    print(item)
                 print(llm_report)
                 print("="*30 + "\n")
             else:
@@ -117,6 +159,19 @@ def analyze_with_souffle(fact_string, event_name, args):
                 print("\n" + "="*30)
                 print("✅ TRANSAKSI NORMAL (LOLOS ATURAN) ✅")
                 # ... (Detail transaksi normal ditampilkan di sini)
+                print(f"\n   Jenis Event: {event_name}")
+                print("   --- Detail Transaksi ---")
+                if event_name == "ETHDepositInitiated":
+                    amount_eth = Web3.from_wei(args['amount'], 'ether')
+                    print(f"     - From: {args['from']}")
+                    print(f"     - To:   {args['to']}")
+                    print(f"     - Amount: {amount_eth:.6f} ETH")
+                elif event_name == "ERC20DepositInitiated":
+                    print(f"     - Token: {args['l1Token']}")
+                    print(f"     - From:  {args['from']}")
+                    print(f"     - To:    {args['to']}")
+                    print(f"     - Amount (wei): {args['amount']}")
+                print("\n" + "="*30 + "\n")
         else:
             # KONDISI 2: TIDAK ADA PELANGGARAN ATURAN
             print("\n" + "="*30)
@@ -133,7 +188,7 @@ def analyze_with_souffle(fact_string, event_name, args):
                 print(f"     - Token: {args['l1Token']}")
                 print(f"     - From:  {args['from']}")
                 print(f"     - To:    {args['to']}")
-                print(f"     - Amount (diasumsikan 18 desimal): {amount_token:.6f}")
+                print(f"     - Amount (wei): {args['amount']}")
             print("\n" + "="*30 + "\n")
 
     except Exception as e:
