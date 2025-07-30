@@ -16,14 +16,14 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") # <-- PERUBAHAN: Kunci baru untuk O
 
 # Validasi Kunci API
 if not INFURA_PROJECT_ID or not OPENAI_API_KEY:
-    print("--- ERROR --- Pastikan INFURA_PROJECT_ID dan OPENAI_API_KEY ada di file .env!")
+    print("--- ERROR --- Make sure INFURA_PROJECT_ID and OPENAI_API_KEY are in the .env file!")
     exit()
 
 # --- PERUBAHAN: Konfigurasi Klien OpenAI ---
 try:
     llm_client = OpenAI(api_key=OPENAI_API_KEY)
 except Exception as e:
-    print(f"--- ERROR --- Gagal mengkonfigurasi klien OpenAI: {e}")
+    print(f"--- ERROR --- Failed to configure OpenAI client: {e}")
     exit()
 
 
@@ -46,36 +46,36 @@ w3 = Web3()
 bridge_contract = w3.eth.contract(address=Web3.to_checksum_address(BRIDGE_CONTRACT_ADDRESS), abi=TARGET_ABIS)
 
 def get_llm_report(souffle_report, event_name, args):
-    """Membuat laporan insiden yang mudah dibaca menggunakan LLM OpenAI."""
-    print("   [INFO] Menghubungi Manajer SOC (OpenAI) untuk membuat laporan...")
+    # """Membuat laporan insiden yang mudah dibaca menggunakan LLM OpenAI."""
+    print("   [INFO] LLM generating a report")
     try:
         # Siapkan detail transaksi untuk prompt
         if event_name == "ETHDepositInitiated":
             amount_eth = Web3.from_wei(args['amount'], 'ether')
-            transaction_details = (f"Jenis Event: Deposit ETH\n"
-                                   f"Dari: {args['from']}\n"
-                                   f"Ke: {args['to']}\n"
-                                   f"Jumlah: {amount_eth:.6f} ETH")
+            transaction_details = (f"Event Type: Deposit ETH\n"
+                                   f"From: {args['from']}\n"
+                                   f"To: {args['to']}\n"
+                                   f"Amount: {amount_eth:.6f} ETH")
         else: # ERC20DepositInitiated
             amount_token = Web3.from_wei(args['amount'], 'ether')
-            transaction_details = (f"Jenis Event: Deposit Token ERC20\n"
+            transaction_details = (f"Event Type: Deposit Token ERC20\n"
                                    f"Token: {args['l1Token']}\n"
-                                   f"Dari: {args['from']}\n"
-                                   f"Ke: {args['to']}\n"
-                                   f"Jumlah (diasumsikan 18 desimal): {amount_token:.6f}")
+                                   f"From: {args['from']}\n"
+                                   f"To: {args['to']}\n"
+                                   f"Amount (Assume 18 decimal): {amount_token:.6f}")
 
         # --- PERUBAHAN: Buat prompt untuk model Chat OpenAI ---
-        system_prompt = "Anda adalah seorang analis keamanan blockchain senior."
-        user_prompt =   (f"Sebuah alarm keamanan baru saja terpicu.\n\n"
-                        f"*Laporan Teknis dari Sistem Deteksi:*\n{souffle_report}\n\n"
-                        f"*Detail Transaksi Pemicu:*\n{transaction_details}\n\n"
-                        f"Tugas Anda:\n"
-                        f"Berdasarkan kedua informasi di atas, analisis potensi insiden keamanan. Jika alamat pengirim dan penerima (from dan to) adalah sama, "
-                        f"anggaplah itu sebagai pola umum dalam transaksi bridging dan *tidak otomatis mencurigakan*, kecuali ada indikasi lain (misalnya nilai sangat besar, token tertentu, dst).\n\n"
-                        f"Tuliskan laporan insiden singkat dengan format berikut:\n"
-                        f"1. *Ringkasan Insiden:* Jelaskan dengan bahasa sederhana apa yang terjadi.\n"
-                        f"2. *Potensi Risiko:* Jelaskan mengapa (atau mengapa tidak) aktivitas ini dianggap berisiko.\n"
-                        f"3. *Rekomendasi Tindakan:* Berikan satu langkah konkret yang harus segera dilakukan oleh operator.\n")
+        system_prompt = "You are a senior blockchain security analyst."
+        user_prompt =   (f"A security alert has just been triggered.\n\n"
+                        f"*Technical Report from the Detection System:*\n{souffle_report}\n\n"
+                        f"*Details of the Triggering Transaction:*\n{transaction_details}\n\n"
+                        f"Your task:\n"
+                        f"Based on the above information, analyze the potential security incident. If the sender and recipient addresses (from and to) are the same, "
+                        f"consider it a common pattern in bridging transactions and *not automatically suspicious*, unless there are other indications (e.g., very large values, specific tokens, etc.).\n\n"
+                        f"Write a brief incident report using the following format:\n"
+                        f"1. *Incident Summary:* Explain in simple terms what happened.\n"
+                        f"2. *Potential Risk:* Explain why (or why not) this activity is considered risky.\n"
+                        f"3. *Recommended Action:* Provide one concrete step that the operator should take immediately.\n")
 
         # --- PERUBAHAN: Panggil API OpenAI ---
         response = llm_client.chat.completions.create(
@@ -87,13 +87,13 @@ def get_llm_report(souffle_report, event_name, args):
         )
         return response.choices[0].message.content
     except Exception as e:
-        print(f"   [ERROR LLM] Gagal membuat laporan: {e}")
-        return "Gagal menghasilkan laporan dari LLM. Harap periksa laporan teknis."
+        print(f"   [ERROR LLM] Failed to generate report: {e}")
+        return "Failed to generate a report from LLM. Please check the technical report."
 
 
 def analyze_with_souffle(fact_string, event_name, args):
-    """Memanggil Souffle dan jika ada alarm, minta LLM untuk menjelaskannya."""
-    print(f"   [INFO] Menganalisis fakta...")
+    # """Memanggil Souffle dan jika ada alarm, minta LLM untuk menjelaskannya."""
+    print(f"   [INFO] Analyzing fact...")
     try:
         command = ['souffle', PATH_TO_RULES_FILE, '-F', '-', '-D', '-']
         result = subprocess.run(command, input=fact_string, text=True, capture_output=True, check=False)
@@ -121,7 +121,7 @@ def analyze_with_souffle(fact_string, event_name, args):
                     
                     # Hanya proses jika ada data nyata
                     if data_rows and "===" not in data_rows[0]:
-                        report = f"\n   Aturan Terpicu: {rule_name}\n   --- Detail Pelanggaran ---"
+                        report = f"\n   Triggered Rule: {rule_name}\n   --- Violation Details ---"
                         
                         for row in data_rows:
                             if not row.strip() or "===" in row:
@@ -149,7 +149,7 @@ def analyze_with_souffle(fact_string, event_name, args):
                 llm_report = get_llm_report(report_items, event_name, args)
 
                 print("\n" + "="*30)
-                print("🚨 LAPORAN INSIDEN (DARI LLM) 🚨")
+                print("🚨 INCIDENT REPORT (FROM LLM) 🚨")
                 for item in report_items:
                     print(item)
                 print(llm_report)
@@ -157,10 +157,10 @@ def analyze_with_souffle(fact_string, event_name, args):
             else:
                 # Jika Souffle menghasilkan output (tabel kosong) tapi tidak ada pelanggaran
                 print("\n" + "="*30)
-                print("✅ TRANSAKSI NORMAL (LOLOS ATURAN) ✅")
+                print("✅ NORMAL TRANSACTIONS (PASSED REGULATIONS) ✅")
                 # ... (Detail transaksi normal ditampilkan di sini)
-                print(f"\n   Jenis Event: {event_name}")
-                print("   --- Detail Transaksi ---")
+                print(f"\n   Event Type: {event_name}")
+                print("   --- Transaction Detail ---")
                 if event_name == "ETHDepositInitiated":
                     amount_eth = Web3.from_wei(args['amount'], 'ether')
                     print(f"     - From: {args['from']}")
@@ -175,9 +175,9 @@ def analyze_with_souffle(fact_string, event_name, args):
         else:
             # KONDISI 2: TIDAK ADA PELANGGARAN ATURAN
             print("\n" + "="*30)
-            print("✅ TRANSAKSI NORMAL (LOLOS ATURAN) ✅")
-            print(f"\n   Jenis Event: {event_name}")
-            print("   --- Detail Transaksi ---")
+            print("✅ NORMAL TRANSACTIONS (PASSED REGULATIONS) ✅")
+            print(f"\n   Event Type: {event_name}")
+            print("   --- Transaction Detail ---")
             if event_name == "ETHDepositInitiated":
                 amount_eth = Web3.from_wei(args['amount'], 'ether')
                 print(f"     - From: {args['from']}")
@@ -192,7 +192,7 @@ def analyze_with_souffle(fact_string, event_name, args):
             print("\n" + "="*30 + "\n")
 
     except Exception as e:
-        print(f"   [ERROR]: Terjadi kesalahan saat menjalankan Souffle: {e}")
+        print(f"   [ERROR]: An error occurred while running Souffle.: {e}")
 
 # ... (Sisa kode on_message, on_error, dll. tetap sama persis seperti versi final sebelumnya) ...
 
@@ -228,11 +228,11 @@ def on_message(ws, message):
             
             if fact_string:
                 print("\n---------------------------------------")
-                print(f"Event '{event_name_found}' diterima.")
+                print(f"Event '{event_name_found}' accepted.")
                 analyze_with_souffle(fact_string, event_name_found, args)
 
         except Exception as e:
-            print(f"   [DEBUG] Gagal mem-parse {event_name_found}: {e}")
+            print(f"   [DEBUG] Failed to parse {event_name_found}: {e}")
 
 def on_error(ws, error):
     print(f"Error WebSocket: {error}")
