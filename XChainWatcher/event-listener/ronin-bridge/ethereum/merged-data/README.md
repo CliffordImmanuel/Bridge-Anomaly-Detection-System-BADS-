@@ -1,1 +1,0 @@
-includes data merged from the other two directories (one with data from blockdaemon and the other from RPC method get_logs)
