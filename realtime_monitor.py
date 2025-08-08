@@ -3,23 +3,21 @@ import json
 import websocket
 import ssl
 import subprocess
-from openai import OpenAI # <-- PERUBAHAN: Import library OpenAI
-from web3 import Web3
+import csv
+from openai import OpenAI
+from datetime import datetime
+from web3 import Web3, HTTPProvider
 from dotenv import load_dotenv
 
-# Muat variabel dari file .env
 load_dotenv()
 
-# --- KONFIGURASI ---
 INFURA_PROJECT_ID = os.getenv("INFURA_PROJECT_ID")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") # <-- PERUBAHAN: Kunci baru untuk OpenAI
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# Validasi Kunci API
 if not INFURA_PROJECT_ID or not OPENAI_API_KEY:
     print("--- ERROR --- Make sure INFURA_PROJECT_ID and OPENAI_API_KEY are in the .env file!")
     exit()
 
-# --- PERUBAHAN: Konfigurasi Klien OpenAI ---
 try:
     llm_client = OpenAI(api_key=OPENAI_API_KEY)
 except Exception as e:
@@ -28,10 +26,11 @@ except Exception as e:
 
 
 INFURA_WEBSOCKET_URL = f"wss://mainnet.infura.io/ws/v3/{INFURA_PROJECT_ID}"
+INFURA_HTTP_URL = f"https://mainnet.infura.io/v3/{INFURA_PROJECT_ID}"
 BRIDGE_CONTRACT_ADDRESS = "0x99C9fc46f92E8a1c0deC1b1747d010903E884bE1"
 PATH_TO_RULES_FILE = "realtime_rules.dl"
+CSV_LOG_FILE = "alerts_log.csv"
 
-# --- KONFIGURASI UNTUK DUA EVENT ---
 TARGET_ABIS = [
     {"anonymous":False,"inputs":[{"indexed":True,"internalType":"address","name":"from","type":"address"},{"indexed":True,"internalType":"address","name":"to","type":"address"},{"indexed":False,"internalType":"uint256","name":"amount","type":"uint256"},{"indexed":False,"internalType":"bytes","name":"extraData","type":"bytes"}],"name":"ETHDepositInitiated","type":"event"},
     {"anonymous":False,"inputs":[{"indexed":True,"internalType":"address","name":"l1Token","type":"address"},{"indexed":True,"internalType":"address","name":"l2Token","type":"address"},{"indexed":True,"internalType":"address","name":"from","type":"address"},{"indexed":False,"internalType":"address","name":"to","type":"address"},{"indexed":False,"internalType":"uint256","name":"amount","type":"uint256"},{"indexed":False,"internalType":"bytes","name":"extraData","type":"bytes"}],"name":"ERC20DepositInitiated","type":"event"}
@@ -41,21 +40,27 @@ TOPIC_HASHES = {
     "0x718594027abd4eaed59f95162563e0cc6d0e8d5b86b1c7be8b1b0ac3343d0396": "ERC20DepositInitiated"
 }
 
-# Inisialisasi Web3
 w3 = Web3()
+try:
+    w3_http = Web3(HTTPProvider(INFURA_HTTP_URL))
+    if not w3_http.is_connected():
+        print("--- ERROR --- Failed to connect to Infura. Check your INFURA_PROJECT_ID.")
+        exit()
+except Exception as e:
+    print(f"--- ERROR --- Failed to connect to Infura: {e}")
+    exit()
 bridge_contract = w3.eth.contract(address=Web3.to_checksum_address(BRIDGE_CONTRACT_ADDRESS), abi=TARGET_ABIS)
 
-def get_llm_report(souffle_report, event_name, args):
+def get_llm_report(souffle_report, event_name, args, enriched_data):
     # """Membuat laporan insiden yang mudah dibaca menggunakan LLM OpenAI."""
     print("   [INFO] LLM generating a report")
     try:
-        # Siapkan detail transaksi untuk prompt
         if event_name == "ETHDepositInitiated":
             amount_eth = Web3.from_wei(args['amount'], 'ether')
             transaction_details = (f"Event Type: Deposit ETH\n"
                                    f"From: {args['from']}\n"
                                    f"To: {args['to']}\n"
-                                   f"Amount: {amount_eth:.6f} ETH")
+                                   f"Amount: {amount_eth:.6f} ETH\n")
         else: # ERC20DepositInitiated
             amount_token = Web3.from_wei(args['amount'], 'ether')
             transaction_details = (f"Event Type: Deposit Token ERC20\n"
@@ -63,8 +68,14 @@ def get_llm_report(souffle_report, event_name, args):
                                    f"From: {args['from']}\n"
                                    f"To: {args['to']}\n"
                                    f"Amount (Assume 18 decimal): {amount_token:.6f}")
+        
+        if enriched_data:
+            ts_readable = datetime.fromtimestamp(enriched_data['timestamp']).strftime('%Y-%m-%d %H:%M:%S UTC')
+            gas_gwei = Web3.from_wei(enriched_data['gasPrice'], 'gwei')
+            transaction_details += (f"\nTimestamp: {ts_readable}\n"
+                                    f"Gas Price: {gas_gwei:.2f} Gwei\n"
+                                    f"Nonce: {enriched_data['nonce']}")   
 
-        # --- PERUBAHAN: Buat prompt untuk model Chat OpenAI ---
         system_prompt = "You are a senior blockchain security analyst."
         user_prompt =   (f"A security alert has just been triggered.\n\n"
                         f"*Technical Report from the Detection System:*\n{souffle_report}\n\n"
@@ -76,10 +87,9 @@ def get_llm_report(souffle_report, event_name, args):
                         f"1. *Incident Summary:* Explain in simple terms what happened.\n"
                         f"2. *Potential Risk:* Explain why (or why not) this activity is considered risky.\n"
                         f"3. *Recommended Action:* Provide one concrete step that the operator should take immediately.\n")
-
-        # --- PERUBAHAN: Panggil API OpenAI ---
+        
         response = llm_client.chat.completions.create(
-            model="gpt-4o-mini", # atau model lain seperti "gpt-4"
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
@@ -90,8 +100,27 @@ def get_llm_report(souffle_report, event_name, args):
         print(f"   [ERROR LLM] Failed to generate report: {e}")
         return "Failed to generate a report from LLM. Please check the technical report."
 
+def log_alert_to_csv(alert_data):
+    """Mencatat alert ke file CSV."""
+    try:
+        with open(CSV_LOG_FILE, mode='a', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                alert_data.get('timestamp'),
+                alert_data.get('rule_name'),
+                alert_data.get('event_type'),
+                alert_data.get('from_address'),
+                alert_data.get('to_address'),
+                alert_data.get('amount'),
+                alert_data.get('token_address', 'N/A'),
+                alert_data.get('gasPrice'),
+                alert_data.get('nonce')
+            ])
+        print(f"   [INFO] Alert for rule's {alert_data.get('rule_name')} has been logged to {CSV_LOG_FILE}")
+    except Exception as e:
+        print(f"   [ERROR] Failed to log alert to CSV: {e}")
 
-def analyze_with_souffle(fact_string, event_name, args):
+def analyze_with_souffle(fact_string, event_name, args, enriched_data):
     # """Memanggil Souffle dan jika ada alarm, minta LLM untuk menjelaskannya."""
     print(f"   [INFO] Analyzing fact...")
     try:
@@ -99,12 +128,11 @@ def analyze_with_souffle(fact_string, event_name, args):
         result = subprocess.run(command, input=fact_string, text=True, capture_output=True, check=False)
 
         if result.stderr:
-             print(f"   [ERROR SOUFFLE]: {result.stderr}")
+              print(f"   [ERROR SOUFFLE]: {result.stderr}")
 
         if result.stdout.strip():
-            report_items = [] # Menyimpan laporan pelanggaran yang valid
+            report_items = []
 
-            # Memisahkan output menjadi beberapa tabel berdasarkan pemisah '---'
             tables = result.stdout.strip().split('---------------')
 
             for table in tables:
@@ -115,11 +143,9 @@ def analyze_with_souffle(fact_string, event_name, args):
                 lines = table.split('\n')
                 rule_name = lines[0].strip()
                 
-                # Cek jika ada baris data (setelah nama aturan, header, dan '===')
                 if len(lines) > 3:
-                    data_rows = lines[3:] # Data dimulai dari baris ke-4 (setelah nama, header, dan ===)
+                    data_rows = lines[3:] 
                     
-                    # Hanya proses jika ada data nyata
                     if data_rows and "===" not in data_rows[0]:
                         report = f"\n   Triggered Rule: {rule_name}\n   --- Violation Details ---"
                         
@@ -128,25 +154,48 @@ def analyze_with_souffle(fact_string, event_name, args):
                                 continue
                                 
                             parts = row.split('\t')
+
+                            alert_data_for_csv = {
+                                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                'rule_name': rule_name,
+                                'event_type': event_name,
+                            }
+
                             if rule_name == "HighValueEthDeposit" and len(parts) == 3:
                                 from_addr, to_addr, amount_wei_str = parts
                                 amount_eth = Web3.from_wei(int(float(amount_wei_str)), 'ether')
                                 report += (f"\n     - From: {from_addr}\n     - To:   {to_addr}"
                                            f"\n     - Amount: {amount_eth:.6f} ETH")
+                                if enriched_data:
+                                    ts_readable = datetime.fromtimestamp(enriched_data['timestamp']).strftime('%Y-%m-%d %H:%M:%S UTC')
+                                    gas_gwei = Web3.from_wei(enriched_data['gasPrice'], 'gwei')
+                                    report += (f"\n     - Timestamp: {ts_readable}"
+                                               f"\n     - Gas Price: {gas_gwei:.2f} Gwei"
+                                               f"\n     - Nonce: {enriched_data['nonce']}")
+                                alert_data_for_csv.update({
+                                    'from_address': from_addr,
+                                    'to_address': to_addr,
+                                    'amount': f"{amount_eth:.6f} ETH",
+                                    'gas_price_gwei': f"{gas_gwei:.2f}",
+                                    'nonce': enriched_data.get('nonce')
+                                })
+                                log_alert_to_csv(alert_data_for_csv)
                             elif rule_name == "SpecificTokenDeposit" and len(parts) == 4:
                                 token_addr, from_addr, to_addr, amount_str = parts
                                 report += (f"\n     - Token: {token_addr} (WETH)\n     - From:  {from_addr}"
                                            f"\n     - To:    {to_addr}\n     - Amount (wei): {int(float(amount_str))}")
+                                alert_data_for_csv.update({
+                                    'from_address': from_addr,
+                                    'to_address': to_addr,
+                                    'amount': f"{int(float(amount_str))} (wei)",
+                                    'token_address': token_addr
+                                })
+                                log_alert_to_csv(alert_data_for_csv)
+
                         report_items.append(report)
-            # Cek apakah benar-benar ada data pelanggaran
-            # has_violation = "===============" in result.stdout
             
-            # if has_violation:
             if report_items:
-                # KONDISI 1: ADA PELANGGARAN ATURAN
-                
-                # Minta LLM untuk membuat laporan
-                llm_report = get_llm_report(report_items, event_name, args)
+                llm_report = get_llm_report(report_items, event_name, args, enriched_data)
 
                 print("\n" + "="*30)
                 print("🚨 INCIDENT REPORT (FROM LLM) 🚨")
@@ -154,47 +203,41 @@ def analyze_with_souffle(fact_string, event_name, args):
                     print(item)
                 print(llm_report)
                 print("="*30 + "\n")
+                return True
             else:
-                # Jika Souffle menghasilkan output (tabel kosong) tapi tidak ada pelanggaran
-                print("\n" + "="*30)
-                print("✅ NORMAL TRANSACTIONS (PASSED REGULATIONS) ✅")
-                # ... (Detail transaksi normal ditampilkan di sini)
-                print(f"\n   Event Type: {event_name}")
-                print("   --- Transaction Detail ---")
-                if event_name == "ETHDepositInitiated":
-                    amount_eth = Web3.from_wei(args['amount'], 'ether')
-                    print(f"     - From: {args['from']}")
-                    print(f"     - To:   {args['to']}")
-                    print(f"     - Amount: {amount_eth:.6f} ETH")
-                elif event_name == "ERC20DepositInitiated":
-                    print(f"     - Token: {args['l1Token']}")
-                    print(f"     - From:  {args['from']}")
-                    print(f"     - To:    {args['to']}")
-                    print(f"     - Amount (wei): {args['amount']}")
-                print("\n" + "="*30 + "\n")
+                print_normal_transaction(event_name, args, enriched_data)
+                return False
         else:
-            # KONDISI 2: TIDAK ADA PELANGGARAN ATURAN
-            print("\n" + "="*30)
-            print("✅ NORMAL TRANSACTIONS (PASSED REGULATIONS) ✅")
-            print(f"\n   Event Type: {event_name}")
-            print("   --- Transaction Detail ---")
-            if event_name == "ETHDepositInitiated":
-                amount_eth = Web3.from_wei(args['amount'], 'ether')
-                print(f"     - From: {args['from']}")
-                print(f"     - To:   {args['to']}")
-                print(f"     - Amount: {amount_eth:.6f} ETH")
-            elif event_name == "ERC20DepositInitiated":
-                amount_token = Web3.from_wei(args['amount'], 'ether')
-                print(f"     - Token: {args['l1Token']}")
-                print(f"     - From:  {args['from']}")
-                print(f"     - To:    {args['to']}")
-                print(f"     - Amount (wei): {args['amount']}")
-            print("\n" + "="*30 + "\n")
+            print_normal_transaction(event_name, args, enriched_data)
+            return False
 
     except Exception as e:
         print(f"   [ERROR]: An error occurred while running Souffle.: {e}")
+        return False
+    
+def print_normal_transaction(event_name, args, enriched_data):
+    print("\n" + "="*30)
+    print("✅ NORMAL TRANSACTION (PASSED RULES) ✅")
+    print(f"\n   Event Type: {event_name}")
+    print("   --- Transaction Detail ---")
+    if event_name == "ETHDepositInitiated":
+        amount_eth = Web3.from_wei(args['amount'], 'ether')
+        print(f"     - From: {args['from']}")
+        print(f"     - To:   {args['to']}")
+        print(f"     - Amount: {amount_eth:.6f} ETH")
+    elif event_name == "ERC20DepositInitiated":
+        print(f"     - Token: {args['l1Token']}")
+        print(f"     - From:  {args['from']}")
+        print(f"     - To:    {args['to']}")
+        print(f"     - Amount (wei): {args['amount']}")
+    if enriched_data:
+        ts_readable = datetime.fromtimestamp(enriched_data['timestamp']).strftime('%Y-%m-%d %H:%M:%S UTC')
+        gas_gwei = Web3.from_wei(enriched_data['gasPrice'], 'gwei')
+        print(f"     - Timestamp: {ts_readable}")
+        print(f"     - Gas Price: {gas_gwei:.2f} Gwei")
+        print(f"     - Nonce: {enriched_data['nonce']}")
+    print("\n" + "="*30 + "\n")
 
-# ... (Sisa kode on_message, on_error, dll. tetap sama persis seperti versi final sebelumnya) ...
 
 def on_message(ws, message):
     """Fungsi yang dijalankan setiap kali ada event baru."""
@@ -211,6 +254,25 @@ def on_message(ws, message):
     if event_topic_hash in TOPIC_HASHES:
         event_name_found = TOPIC_HASHES[event_topic_hash]
         try:
+            print("\n---------------------------------------")
+            print(f"Event '{event_name_found}' detected. Processing...")
+
+            tx_hash = log_data_raw['transactionHash']
+            transaction_details = w3_http.eth.get_transaction(tx_hash)
+
+            block_number = log_data_raw.get('blockNumber')
+            block_details = w3_http.eth.get_block(block_number)
+
+            enriched_data = {
+                "timestamp": block_details['timestamp'],
+                "gasPrice": transaction_details['gasPrice'],
+                "nonce": transaction_details['nonce']
+            }
+
+            print("  [INFO] Investigating transaction details...")
+
+
+
             log_copy = log_data_raw.copy()
             log_copy['topics'] = [Web3.to_bytes(hexstr=t) for t in log_copy['topics']]
             log_copy['data'] = Web3.to_bytes(hexstr=log_copy['data'])
@@ -228,8 +290,12 @@ def on_message(ws, message):
             
             if fact_string:
                 print("\n---------------------------------------")
-                print(f"Event '{event_name_found}' accepted.")
-                analyze_with_souffle(fact_string, event_name_found, args)
+                print(f"Event '{event_name_found}' detected. Analyzing...")
+                
+                has_anomaly = analyze_with_souffle(fact_string, event_name_found, args, enriched_data)
+                
+                print(f"   [CLASSIFICATION] Anomaly Detected: {has_anomaly}")
+
 
         except Exception as e:
             print(f"   [DEBUG] Failed to parse {event_name_found}: {e}")
@@ -248,8 +314,17 @@ def on_open(ws):
     }
     ws.send(json.dumps(subscribe_message))
 
+def setup_csv_log():
+    """Membuat file CSV log jika belum ada."""
+    if not os.path.exists(CSV_LOG_FILE):
+        with open(CSV_LOG_FILE, mode='w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['Timestamp', 'Rule Name', 'Event Type', 'From Address', 'To Address', 'Amount', 'Token Address'])
+        print(f"   [INFO] Created CSV log file: {CSV_LOG_FILE}")
+
 if __name__ == "__main__":
     print("Memulai Monitor Real-Time (Terintegrasi dengan LLM)...")
+    setup_csv_log()
     ws = websocket.WebSocketApp(
         INFURA_WEBSOCKET_URL,
         on_open=on_open,

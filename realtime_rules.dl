@@ -25,7 +25,7 @@ ERC20DepositInitiated(as(l1Token, Address), as(l2Token, Address), as(from, Addre
 // --- ATURAN ANALISIS ---
 HighValueEthDeposit(from, to, amount) :-
     ETHDepositInitiated(from, to, amount, _),
-    amount >= 50000000000000000000.0. // Batas 50 ETH
+    amount <= 50000000000000000000.0. // Batas 50 ETH
 
 SpecificTokenDeposit(token, from, to, amount) :-
     ERC20DepositInitiated(token, _, from, to, amount, _),
