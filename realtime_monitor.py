@@ -3,7 +3,9 @@ import json
 import websocket
 import ssl
 import subprocess
+import requests
 import csv
+import statistics
 from openai import OpenAI
 from datetime import datetime
 from web3 import Web3, HTTPProvider
@@ -13,6 +15,7 @@ load_dotenv()
 
 INFURA_PROJECT_ID = os.getenv("INFURA_PROJECT_ID")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+ETHERSCAN_API_KEY = os.getenv("ETHERSCAN_API_KEY")
 
 if not INFURA_PROJECT_ID or not OPENAI_API_KEY:
     print("--- ERROR --- Make sure INFURA_PROJECT_ID and OPENAI_API_KEY are in the .env file!")
@@ -33,11 +36,10 @@ CSV_LOG_FILE = "alerts_log.csv"
 
 TARGET_ABIS = [
     {"anonymous":False,"inputs":[{"indexed":True,"internalType":"address","name":"from","type":"address"},{"indexed":True,"internalType":"address","name":"to","type":"address"},{"indexed":False,"internalType":"uint256","name":"amount","type":"uint256"},{"indexed":False,"internalType":"bytes","name":"extraData","type":"bytes"}],"name":"ETHDepositInitiated","type":"event"},
-    {"anonymous":False,"inputs":[{"indexed":True,"internalType":"address","name":"l1Token","type":"address"},{"indexed":True,"internalType":"address","name":"l2Token","type":"address"},{"indexed":True,"internalType":"address","name":"from","type":"address"},{"indexed":False,"internalType":"address","name":"to","type":"address"},{"indexed":False,"internalType":"uint256","name":"amount","type":"uint256"},{"indexed":False,"internalType":"bytes","name":"extraData","type":"bytes"}],"name":"ERC20DepositInitiated","type":"event"}
 ]
+
 TOPIC_HASHES = {
     "0x35d79ab81f2b2017e19afb5c5571778877782d7a8786f5907f93b0f4702f4f23": "ETHDepositInitiated",
-    "0x718594027abd4eaed59f95162563e0cc6d0e8d5b86b1c7be8b1b0ac3343d0396": "ERC20DepositInitiated"
 }
 
 w3 = Web3()
@@ -51,7 +53,7 @@ except Exception as e:
     exit()
 bridge_contract = w3.eth.contract(address=Web3.to_checksum_address(BRIDGE_CONTRACT_ADDRESS), abi=TARGET_ABIS)
 
-def get_llm_report(souffle_report, event_name, args, enriched_data):
+def get_llm_report(event_name, args, enriched_data, souffle_report=None):
     # """Membuat laporan insiden yang mudah dibaca menggunakan LLM OpenAI."""
     print("   [INFO] LLM generating a report")
     try:
@@ -61,13 +63,7 @@ def get_llm_report(souffle_report, event_name, args, enriched_data):
                                    f"From: {args['from']}\n"
                                    f"To: {args['to']}\n"
                                    f"Amount: {amount_eth:.6f} ETH\n")
-        else: # ERC20DepositInitiated
-            amount_token = Web3.from_wei(args['amount'], 'ether')
-            transaction_details = (f"Event Type: Deposit Token ERC20\n"
-                                   f"Token: {args['l1Token']}\n"
-                                   f"From: {args['from']}\n"
-                                   f"To: {args['to']}\n"
-                                   f"Amount (Assume 18 decimal): {amount_token:.6f}")
+            list_transaction = get_list_transaction(args['from'])
         
         if enriched_data:
             ts_readable = datetime.fromtimestamp(enriched_data['timestamp']).strftime('%Y-%m-%d %H:%M:%S UTC')
@@ -75,14 +71,16 @@ def get_llm_report(souffle_report, event_name, args, enriched_data):
             transaction_details += (f"\nTimestamp: {ts_readable}\n"
                                     f"Gas Price: {gas_gwei:.2f} Gwei\n"
                                     f"Nonce: {enriched_data['nonce']}")   
-
+        
         system_prompt = "You are a senior blockchain security analyst."
         user_prompt =   (f"A security alert has just been triggered.\n\n"
                         f"*Technical Report from the Detection System:*\n{souffle_report}\n\n"
                         f"*Details of the Triggering Transaction:*\n{transaction_details}\n\n"
+                        f"*List of transaction on the address:*\n{list_transaction}\n\n"
                         f"Your task:\n"
                         f"Based on the above information, analyze the potential security incident. If the sender and recipient addresses (from and to) are the same, "
-                        f"consider it a common pattern in bridging transactions and *not automatically suspicious*, unless there are other indications (e.g., very large values, specific tokens, etc.).\n\n"
+                        f"consider it a common pattern in bridging transactions and *not automatically suspicious*, unless there are other indications (e.g., very large values, specific tokens, etc.).\n"
+                        f"Use the list of transaction as a verification if the transacctions is a suspicious or not.\n\n"
                         f"Write a brief incident report using the following format:\n"
                         f"1. *Incident Summary:* Explain in simple terms what happened.\n"
                         f"2. *Potential Risk:* Explain why (or why not) this activity is considered risky.\n"
@@ -120,6 +118,21 @@ def log_alert_to_csv(alert_data):
     except Exception as e:
         print(f"   [ERROR] Failed to log alert to CSV: {e}")
 
+def get_list_transaction(address):
+    url = f"https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlist&address={address}&startblock=0&endblock=99999999&page=1&offset=2&sort=desc&apikey={ETHERSCAN_API_KEY}"
+    resp = requests.get(url).json()
+    if resp['status'] == '1':
+        return(resp)
+    return 0
+
+def get_median_gas():
+    block = w3_http.eth.get_block('latest', full_transactions=True)
+
+    gas_prices = [tx['gasPrice'] for tx in block.transactions]
+    median_gas = statistics.median(gas_prices)
+    print(f"Median gas price: {w3.from_wei(median_gas, 'gwei')} gwei")
+    # return median_gas
+
 def analyze_with_souffle(fact_string, event_name, args, enriched_data):
     # """Memanggil Souffle dan jika ada alarm, minta LLM untuk menjelaskannya."""
     print(f"   [INFO] Analyzing fact...")
@@ -132,6 +145,7 @@ def analyze_with_souffle(fact_string, event_name, args, enriched_data):
 
         if result.stdout.strip():
             report_items = []
+            get_median_gas()
 
             tables = result.stdout.strip().split('---------------')
 
@@ -180,22 +194,11 @@ def analyze_with_souffle(fact_string, event_name, args, enriched_data):
                                     'nonce': enriched_data.get('nonce')
                                 })
                                 log_alert_to_csv(alert_data_for_csv)
-                            elif rule_name == "SpecificTokenDeposit" and len(parts) == 4:
-                                token_addr, from_addr, to_addr, amount_str = parts
-                                report += (f"\n     - Token: {token_addr} (WETH)\n     - From:  {from_addr}"
-                                           f"\n     - To:    {to_addr}\n     - Amount (wei): {int(float(amount_str))}")
-                                alert_data_for_csv.update({
-                                    'from_address': from_addr,
-                                    'to_address': to_addr,
-                                    'amount': f"{int(float(amount_str))} (wei)",
-                                    'token_address': token_addr
-                                })
-                                log_alert_to_csv(alert_data_for_csv)
 
                         report_items.append(report)
             
             if report_items:
-                llm_report = get_llm_report(report_items, event_name, args, enriched_data)
+                llm_report = get_llm_report(event_name, args, enriched_data, report_items)
 
                 print("\n" + "="*30)
                 print("🚨 INCIDENT REPORT (FROM LLM) 🚨")
@@ -225,11 +228,6 @@ def print_normal_transaction(event_name, args, enriched_data):
         print(f"     - From: {args['from']}")
         print(f"     - To:   {args['to']}")
         print(f"     - Amount: {amount_eth:.6f} ETH")
-    elif event_name == "ERC20DepositInitiated":
-        print(f"     - Token: {args['l1Token']}")
-        print(f"     - From:  {args['from']}")
-        print(f"     - To:    {args['to']}")
-        print(f"     - Amount (wei): {args['amount']}")
     if enriched_data:
         ts_readable = datetime.fromtimestamp(enriched_data['timestamp']).strftime('%Y-%m-%d %H:%M:%S UTC')
         gas_gwei = Web3.from_wei(enriched_data['gasPrice'], 'gwei')
@@ -283,10 +281,6 @@ def on_message(ws, message):
             if event_name_found == "ETHDepositInitiated":
                 fact_string = (f"ETH\t{args['from']}\t{args['to']}\t\t\t"
                                f"{args['amount']}\t{Web3.to_hex(args['extraData'])}\n")
-            elif event_name_found == "ERC20DepositInitiated":
-                fact_string = (f"ERC20\t{args['l1Token']}\t{args['l2Token']}\t"
-                               f"{args['from']}\t{args['to']}\t{args['amount']}\t"
-                               f"{Web3.to_hex(args['extraData'])}\n")
             
             if fact_string:
                 print("\n---------------------------------------")
@@ -307,7 +301,7 @@ def on_close(ws, close_status_code, close_msg):
     print("Koneksi WebSocket ditutup.")
 
 def on_open(ws):
-    print("Koneksi WebSocket dibuka. Memonitor event deposit ETH dan ERC20...")
+    print("Koneksi WebSocket dibuka. Memonitor event deposit ETH...")
     subscribe_message = {
         "jsonrpc": "2.0", "id": 1, "method": "eth_subscribe",
         "params": ["logs", {"address": BRIDGE_CONTRACT_ADDRESS, "topics": [list(TOPIC_HASHES.keys())]}]
