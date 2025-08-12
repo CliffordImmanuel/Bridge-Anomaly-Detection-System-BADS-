@@ -2,20 +2,27 @@
 .type Address <: symbol
 
 // --- DEKLARASI INPUT UNIVERSAL ---
-.decl IncomingEvent(type:symbol, p1:symbol, p2:symbol, p3:symbol, p4:symbol, p5:float, p6:symbol)
+.decl IncomingEvent(type:symbol, from:symbol, to:symbol, amount:float, extraData:symbol, timestamp:number, gasPrice: float, nonce:number, medianGas:float)
 .input IncomingEvent(IO=stdin, delimiter="\t")
 
 // --- MEMBUAT ULANG FAKTA SPESIFIK (Internal) ---
-.decl ETHDepositInitiated(from:Address, to:Address, amount:float, extraData:symbol)
+.decl ETHDepositInitiated(from:Address, to:Address, amount:float, extraData:symbol, timestamp:number, gasPrice: float, nonce:number, medianGas:float)
 
-ETHDepositInitiated(as(from, Address), as(to, Address), amount, extraData) :-
-    IncomingEvent("ETH", from, to, _, _, amount, extraData).
+ETHDepositInitiated(as(from, Address), as(to, Address), amount, extraData, timestamp, gasPrice, nonce, medianGas) :-
+    IncomingEvent("ETH", from, to, amount, extraData, timestamp, gasPrice, nonce, medianGas).
 
-// --- DEKLARASI OUTPUT ---
+// --- DEKLARASI RULES ---
 .decl HighValueEthDeposit(from:Address, to:Address, amount:float)
 .output HighValueEthDeposit
 
+.decl HighGasPrice(gasPrice:float, medianGas:float)
+.output HighGasPrice
+
 // --- ATURAN ANALISIS ---
 HighValueEthDeposit(from, to, amount) :-
-    ETHDepositInitiated(from, to, amount, _),
+    ETHDepositInitiated(from, to, amount, _, _, _, _, _),
     amount <= 50000000000000000000.0. // Batas 50 ETH
+
+HighGasPrice(gasPrice, medianGas) :-
+    ETHDepositInitiated(_, _, _, _, _, gasPrice, _, medianGas),
+    gasPrice > medianGas.

@@ -130,8 +130,8 @@ def get_median_gas():
 
     gas_prices = [tx['gasPrice'] for tx in block.transactions]
     median_gas = statistics.median(gas_prices)
-    print(f"Median gas price: {w3.from_wei(median_gas, 'gwei')} gwei")
-    # return median_gas
+    # print(f"Median gas price: {w3.from_wei(median_gas, 'gwei')} gwei")
+    return median_gas
 
 def analyze_with_souffle(fact_string, event_name, args, enriched_data):
     # """Memanggil Souffle dan jika ada alarm, minta LLM untuk menjelaskannya."""
@@ -145,7 +145,6 @@ def analyze_with_souffle(fact_string, event_name, args, enriched_data):
 
         if result.stdout.strip():
             report_items = []
-            get_median_gas()
 
             tables = result.stdout.strip().split('---------------')
 
@@ -194,7 +193,12 @@ def analyze_with_souffle(fact_string, event_name, args, enriched_data):
                                     'nonce': enriched_data.get('nonce')
                                 })
                                 log_alert_to_csv(alert_data_for_csv)
-
+                            elif rule_name == "HighGasPrice" and len(parts) == 2:
+                                gas_price_str, median_gas_str = parts
+                                gas_gwei = Web3.from_wei(int(float(gas_price_str)), 'gwei')
+                                median_gwei = Web3.from_wei(int(float(median_gas_str)), 'gwei')
+                                report += (f"\n     - Gas Price: {gas_gwei:.2f} Gwei"
+                                           f"\n     - Median Gas: {median_gwei:.2f} Gwei")
                         report_items.append(report)
             
             if report_items:
@@ -267,9 +271,9 @@ def on_message(ws, message):
                 "nonce": transaction_details['nonce']
             }
 
+            median_gas = get_median_gas()
+
             print("  [INFO] Investigating transaction details...")
-
-
 
             log_copy = log_data_raw.copy()
             log_copy['topics'] = [Web3.to_bytes(hexstr=t) for t in log_copy['topics']]
@@ -279,8 +283,10 @@ def on_message(ws, message):
             args = decoded_log['args']
 
             if event_name_found == "ETHDepositInitiated":
-                fact_string = (f"ETH\t{args['from']}\t{args['to']}\t\t\t"
-                               f"{args['amount']}\t{Web3.to_hex(args['extraData'])}\n")
+                fact_string = (f"ETH\t{args['from']}\t{args['to']}\t"
+                               f"{args['amount']}\t{Web3.to_hex(args['extraData'])}\t"
+                               f"{enriched_data['timestamp']}\t{enriched_data['gasPrice']}\t"
+                               f"{enriched_data['nonce']}\t{median_gas}\n")
             
             if fact_string:
                 print("\n---------------------------------------")
