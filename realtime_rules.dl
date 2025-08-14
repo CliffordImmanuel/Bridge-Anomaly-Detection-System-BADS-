@@ -21,7 +21,7 @@ ETHDepositInitiated(as(from, Address), as(to, Address), amount, extraData, times
 // --- ATURAN ANALISIS ---
 HighValueEthDeposit(from, to, amount) :-
     ETHDepositInitiated(from, to, amount, _, _, _, _, _),
-    amount <= 50000000000000000000.0. // Batas 50 ETH
+    amount >= 10000000000000000000.0. // Batas 10 ETH
 
 HighGasPrice(gasPrice, medianGas) :-
     ETHDepositInitiated(_, _, _, _, _, gasPrice, _, medianGas),

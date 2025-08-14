@@ -4,7 +4,6 @@ import websocket
 import ssl
 import subprocess
 import requests
-import csv
 import statistics
 from openai import OpenAI
 from datetime import datetime
@@ -32,7 +31,6 @@ INFURA_WEBSOCKET_URL = f"wss://mainnet.infura.io/ws/v3/{INFURA_PROJECT_ID}"
 INFURA_HTTP_URL = f"https://mainnet.infura.io/v3/{INFURA_PROJECT_ID}"
 BRIDGE_CONTRACT_ADDRESS = "0x99C9fc46f92E8a1c0deC1b1747d010903E884bE1"
 PATH_TO_RULES_FILE = "realtime_rules.dl"
-CSV_LOG_FILE = "alerts_log.csv"
 
 TARGET_ABIS = [
     {"anonymous":False,"inputs":[{"indexed":True,"internalType":"address","name":"from","type":"address"},{"indexed":True,"internalType":"address","name":"to","type":"address"},{"indexed":False,"internalType":"uint256","name":"amount","type":"uint256"},{"indexed":False,"internalType":"bytes","name":"extraData","type":"bytes"}],"name":"ETHDepositInitiated","type":"event"},
@@ -79,12 +77,14 @@ def get_llm_report(event_name, args, enriched_data, souffle_report=None):
                         f"*List of transaction on the address:*\n{list_transaction}\n\n"
                         f"Your task:\n"
                         f"Based on the above information, analyze the potential security incident. If the sender and recipient addresses (from and to) are the same, "
-                        f"consider it a common pattern in bridging transactions and *not automatically suspicious*, unless there are other indications (e.g., very large values, specific tokens, etc.).\n"
-                        f"Use the list of transaction as a verification if the transacctions is a suspicious or not.\n\n"
-                        f"Write a brief incident report using the following format:\n"
+                        f"consider it a common pattern in bridging transactions and *not automatically suspicious*, unless there are other indications (e.g., very large values, high gas price, etc.).\n"
+                        f"Use the list of transaction as a verification if the transactions is a suspicious or not.\n\n"
+                        f"Write your decision if the transaction is a suspicious or not and give your reasoning in a structure format:\n"
                         f"1. *Incident Summary:* Explain in simple terms what happened.\n"
                         f"2. *Potential Risk:* Explain why (or why not) this activity is considered risky.\n"
-                        f"3. *Recommended Action:* Provide one concrete step that the operator should take immediately.\n")
+                        f"3. *Recommended Action:* Provide one concrete step that the operator should take immediately.\n"
+                        f"4. Classification: Based on your verification, decide the classification for the transaction, "
+                        f"if the transaction is considered an attack or anomaly, print True, else print False")
         
         response = llm_client.chat.completions.create(
             model="gpt-4o-mini",
@@ -98,35 +98,15 @@ def get_llm_report(event_name, args, enriched_data, souffle_report=None):
         print(f"   [ERROR LLM] Failed to generate report: {e}")
         return "Failed to generate a report from LLM. Please check the technical report."
 
-def log_alert_to_csv(alert_data):
-    """Mencatat alert ke file CSV."""
-    try:
-        with open(CSV_LOG_FILE, mode='a', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow([
-                alert_data.get('timestamp'),
-                alert_data.get('rule_name'),
-                alert_data.get('event_type'),
-                alert_data.get('from_address'),
-                alert_data.get('to_address'),
-                alert_data.get('amount'),
-                alert_data.get('token_address', 'N/A'),
-                alert_data.get('gasPrice'),
-                alert_data.get('nonce')
-            ])
-        print(f"   [INFO] Alert for rule's {alert_data.get('rule_name')} has been logged to {CSV_LOG_FILE}")
-    except Exception as e:
-        print(f"   [ERROR] Failed to log alert to CSV: {e}")
-
 def get_list_transaction(address):
-    url = f"https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlist&address={address}&startblock=0&endblock=99999999&page=1&offset=2&sort=desc&apikey={ETHERSCAN_API_KEY}"
+    url = f"https://api.etherscan.io/v2/api?chainid=1&module=account&action=txlist&address={address}&startblock=0&endblock=99999999&page=1&offset=10&sort=desc&apikey={ETHERSCAN_API_KEY}"
     resp = requests.get(url).json()
     if resp['status'] == '1':
         return(resp)
     return 0
 
-def get_median_gas():
-    block = w3_http.eth.get_block('latest', full_transactions=True)
+def get_median_gas(block):
+    # block = w3_http.eth.get_block('latest', full_transactions=True)
 
     gas_prices = [tx['gasPrice'] for tx in block.transactions]
     median_gas = statistics.median(gas_prices)
@@ -160,19 +140,13 @@ def analyze_with_souffle(fact_string, event_name, args, enriched_data):
                     data_rows = lines[3:] 
                     
                     if data_rows and "===" not in data_rows[0]:
-                        report = f"\n   Triggered Rule: {rule_name}\n   --- Violation Details ---"
+                        report = f"\n   Triggered Rule: {rule_name}\n   --- Transaction Details ---"
                         
                         for row in data_rows:
                             if not row.strip() or "===" in row:
                                 continue
                                 
                             parts = row.split('\t')
-
-                            alert_data_for_csv = {
-                                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                                'rule_name': rule_name,
-                                'event_type': event_name,
-                            }
 
                             if rule_name == "HighValueEthDeposit" and len(parts) == 3:
                                 from_addr, to_addr, amount_wei_str = parts
@@ -185,14 +159,6 @@ def analyze_with_souffle(fact_string, event_name, args, enriched_data):
                                     report += (f"\n     - Timestamp: {ts_readable}"
                                                f"\n     - Gas Price: {gas_gwei:.2f} Gwei"
                                                f"\n     - Nonce: {enriched_data['nonce']}")
-                                alert_data_for_csv.update({
-                                    'from_address': from_addr,
-                                    'to_address': to_addr,
-                                    'amount': f"{amount_eth:.6f} ETH",
-                                    'gas_price_gwei': f"{gas_gwei:.2f}",
-                                    'nonce': enriched_data.get('nonce')
-                                })
-                                log_alert_to_csv(alert_data_for_csv)
                             elif rule_name == "HighGasPrice" and len(parts) == 2:
                                 gas_price_str, median_gas_str = parts
                                 gas_gwei = Web3.from_wei(int(float(gas_price_str)), 'gwei')
@@ -206,8 +172,21 @@ def analyze_with_souffle(fact_string, event_name, args, enriched_data):
 
                 print("\n" + "="*30)
                 print("🚨 INCIDENT REPORT (FROM LLM) 🚨")
-                for item in report_items:
-                    print(item)
+                # print(f"\n   Triggered Rule: {rule_name}\n   --- Transaction Details ---")
+                # for item in report_items:
+                #     print(item)
+                amount_eth = Web3.from_wei(args['amount'], 'ether')
+                print(f"     - From: {args['from']}")
+                print(f"     - To:   {args['to']}")
+                print(f"     - Amount: {amount_eth:.6f} ETH")
+                if enriched_data:
+                    ts_readable = datetime.fromtimestamp(enriched_data['timestamp']).strftime('%Y-%m-%d %H:%M:%S UTC')
+                    gas_gwei = Web3.from_wei(enriched_data['gasPrice'], 'gwei')
+                    median_gas_gwei = Web3.from_wei(int(float(enriched_data['medianGas'])), 'gwei')
+                    print(f"     - Timestamp: {ts_readable}")
+                    print(f"     - Gas Price: {gas_gwei:.2f} Gwei")
+                    print(f"     - Median Gas: {median_gas_gwei:.2f} Gwei")
+                    print(f"     - Nonce: {enriched_data['nonce']}")
                 print(llm_report)
                 print("="*30 + "\n")
                 return True
@@ -263,15 +242,15 @@ def on_message(ws, message):
             transaction_details = w3_http.eth.get_transaction(tx_hash)
 
             block_number = log_data_raw.get('blockNumber')
-            block_details = w3_http.eth.get_block(block_number)
+            block_details = w3_http.eth.get_block(block_number, full_transactions=True)
+            median_gas = get_median_gas(block_details)
 
             enriched_data = {
                 "timestamp": block_details['timestamp'],
                 "gasPrice": transaction_details['gasPrice'],
-                "nonce": transaction_details['nonce']
+                "nonce": transaction_details['nonce'],
+                "medianGas": median_gas
             }
-
-            median_gas = get_median_gas()
 
             print("  [INFO] Investigating transaction details...")
 
@@ -292,9 +271,9 @@ def on_message(ws, message):
                 print("\n---------------------------------------")
                 print(f"Event '{event_name_found}' detected. Analyzing...")
                 
-                has_anomaly = analyze_with_souffle(fact_string, event_name_found, args, enriched_data)
+                analyze_with_souffle(fact_string, event_name_found, args, enriched_data)
                 
-                print(f"   [CLASSIFICATION] Anomaly Detected: {has_anomaly}")
+                # print(f"   [CLASSIFICATION] Anomaly Detected: {has_anomaly}")
 
 
         except Exception as e:
@@ -314,17 +293,8 @@ def on_open(ws):
     }
     ws.send(json.dumps(subscribe_message))
 
-def setup_csv_log():
-    """Membuat file CSV log jika belum ada."""
-    if not os.path.exists(CSV_LOG_FILE):
-        with open(CSV_LOG_FILE, mode='w', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(['Timestamp', 'Rule Name', 'Event Type', 'From Address', 'To Address', 'Amount', 'Token Address'])
-        print(f"   [INFO] Created CSV log file: {CSV_LOG_FILE}")
-
 if __name__ == "__main__":
     print("Memulai Monitor Real-Time (Terintegrasi dengan LLM)...")
-    setup_csv_log()
     ws = websocket.WebSocketApp(
         INFURA_WEBSOCKET_URL,
         on_open=on_open,
