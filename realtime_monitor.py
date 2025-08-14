@@ -52,7 +52,6 @@ except Exception as e:
 bridge_contract = w3.eth.contract(address=Web3.to_checksum_address(BRIDGE_CONTRACT_ADDRESS), abi=TARGET_ABIS)
 
 def get_llm_report(event_name, args, enriched_data, souffle_report=None):
-    # """Membuat laporan insiden yang mudah dibaca menggunakan LLM OpenAI."""
     print("   [INFO] LLM generating a report")
     try:
         if event_name == "ETHDepositInitiated":
@@ -80,11 +79,11 @@ def get_llm_report(event_name, args, enriched_data, souffle_report=None):
                         f"consider it a common pattern in bridging transactions and *not automatically suspicious*, unless there are other indications (e.g., very large values, high gas price, etc.).\n"
                         f"Use the list of transaction as a verification if the transactions is a suspicious or not.\n\n"
                         f"Write your decision if the transaction is a suspicious or not and give your reasoning in a structure format:\n"
-                        f"1. *Incident Summary:* Explain in simple terms what happened.\n"
-                        f"2. *Potential Risk:* Explain why (or why not) this activity is considered risky.\n"
-                        f"3. *Recommended Action:* Provide one concrete step that the operator should take immediately.\n"
-                        f"4. Classification: Based on your verification, decide the classification for the transaction, "
-                        f"if the transaction is considered an attack or anomaly, print True, else print False")
+                        f"1. Classification: Based on your verification, decide the classification for the transaction, "
+                        f"if the transaction is considered an attack or anomaly, print Anomalous, else print Normal\n"
+                        f"2. *Incident Summary:* Explain in simple terms what happened in this transaction.\n"
+                        f"3. *Potential Risk:* Explain why (or why not) this activity is considered risky. Provide an in-depth reasoning that determines the classification.\n"
+                        f"4. *Recommended Action:* Provide one concrete step that the operator should take immediately.\n")
         
         response = llm_client.chat.completions.create(
             model="gpt-4o-mini",
@@ -114,7 +113,6 @@ def get_median_gas(block):
     return median_gas
 
 def analyze_with_souffle(fact_string, event_name, args, enriched_data):
-    # """Memanggil Souffle dan jika ada alarm, minta LLM untuk menjelaskannya."""
     print(f"   [INFO] Analyzing fact...")
     try:
         command = ['souffle', PATH_TO_RULES_FILE, '-F', '-', '-D', '-']
@@ -172,9 +170,6 @@ def analyze_with_souffle(fact_string, event_name, args, enriched_data):
 
                 print("\n" + "="*30)
                 print("🚨 INCIDENT REPORT (FROM LLM) 🚨")
-                # print(f"\n   Triggered Rule: {rule_name}\n   --- Transaction Details ---")
-                # for item in report_items:
-                #     print(item)
                 amount_eth = Web3.from_wei(args['amount'], 'ether')
                 print(f"     - From: {args['from']}")
                 print(f"     - To:   {args['to']}")
@@ -216,12 +211,12 @@ def print_normal_transaction(event_name, args, enriched_data):
         gas_gwei = Web3.from_wei(enriched_data['gasPrice'], 'gwei')
         print(f"     - Timestamp: {ts_readable}")
         print(f"     - Gas Price: {gas_gwei:.2f} Gwei")
+        print(f"     - Median Gas: {Web3.from_wei(int(float(enriched_data['medianGas'])), 'gwei'):.2f} Gwei")
         print(f"     - Nonce: {enriched_data['nonce']}")
     print("\n" + "="*30 + "\n")
 
 
 def on_message(ws, message):
-    """Fungsi yang dijalankan setiap kali ada event baru."""
     data = json.loads(message)
     if "params" not in data or "result" not in data["params"]:
         return
@@ -272,9 +267,6 @@ def on_message(ws, message):
                 print(f"Event '{event_name_found}' detected. Analyzing...")
                 
                 analyze_with_souffle(fact_string, event_name_found, args, enriched_data)
-                
-                # print(f"   [CLASSIFICATION] Anomaly Detected: {has_anomaly}")
-
 
         except Exception as e:
             print(f"   [DEBUG] Failed to parse {event_name_found}: {e}")
@@ -283,10 +275,10 @@ def on_error(ws, error):
     print(f"Error WebSocket: {error}")
 
 def on_close(ws, close_status_code, close_msg):
-    print("Koneksi WebSocket ditutup.")
+    print("WebSocket connection closed.")
 
 def on_open(ws):
-    print("Koneksi WebSocket dibuka. Memonitor event deposit ETH...")
+    print("WebSocket connection opened. Monitoring ETH deposit events...")
     subscribe_message = {
         "jsonrpc": "2.0", "id": 1, "method": "eth_subscribe",
         "params": ["logs", {"address": BRIDGE_CONTRACT_ADDRESS, "topics": [list(TOPIC_HASHES.keys())]}]
@@ -294,7 +286,7 @@ def on_open(ws):
     ws.send(json.dumps(subscribe_message))
 
 if __name__ == "__main__":
-    print("Memulai Monitor Real-Time (Terintegrasi dengan LLM)...")
+    print("Starting The Real-Time Monitoring...")
     ws = websocket.WebSocketApp(
         INFURA_WEBSOCKET_URL,
         on_open=on_open,
