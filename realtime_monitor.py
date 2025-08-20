@@ -51,7 +51,7 @@ except Exception as e:
     exit()
 bridge_contract = w3.eth.contract(address=Web3.to_checksum_address(BRIDGE_CONTRACT_ADDRESS), abi=TARGET_ABIS)
 
-def get_llm_report(event_name, args, enriched_data, souffle_report=None):
+def get_llm_report(event_name, args, enriched_data, souffle_report):
     print("   [INFO] LLM generating a report")
     try:
         if event_name == "ETHDepositInitiated":
@@ -61,6 +61,7 @@ def get_llm_report(event_name, args, enriched_data, souffle_report=None):
                                    f"To: {args['to']}\n"
                                    f"Amount: {amount_eth:.6f} ETH\n")
             list_transaction = get_list_transaction(args['from'])
+            list_median = get_median_gas_list(enriched_data['block'])
         
         if enriched_data:
             ts_readable = datetime.fromtimestamp(enriched_data['timestamp']).strftime('%Y-%m-%d %H:%M:%S UTC')
@@ -70,20 +71,21 @@ def get_llm_report(event_name, args, enriched_data, souffle_report=None):
                                     f"Nonce: {enriched_data['nonce']}")   
         
         system_prompt = "You are a senior blockchain security analyst."
-        user_prompt =   (f"A security alert has just been triggered.\n\n"
-                        f"*Technical Report from the Detection System:*\n{souffle_report}\n\n"
-                        f"*Details of the Triggering Transaction:*\n{transaction_details}\n\n"
-                        f"*List of transaction on the address:*\n{list_transaction}\n\n"
-                        f"Your task:\n"
-                        f"Based on the above information, analyze the potential security incident. If the sender and recipient addresses (from and to) are the same, "
-                        f"consider it a common pattern in bridging transactions and *not automatically suspicious*, unless there are other indications (e.g., very large values, high gas price, etc.).\n"
-                        f"Use the list of transaction as a verification if the transactions is a suspicious or not.\n\n"
-                        f"Write your decision if the transaction is a suspicious or not and give your reasoning in a structure format:\n"
-                        f"1. Classification: Based on your verification, decide the classification for the transaction, "
-                        f"if the transaction is considered an attack or anomaly, print Anomalous, else print Normal\n"
-                        f"2. *Incident Summary:* Explain in simple terms what happened in this transaction.\n"
-                        f"3. *Potential Risk:* Explain why (or why not) this activity is considered risky. Provide an in-depth reasoning that determines the classification.\n"
-                        f"4. *Recommended Action:* Provide one concrete step that the operator should take immediately.\n")
+        user_prompt =  (f"A security alert has just been triggered.\n\n"
+                 f"1. *Technical Report from Detection System (Soufflé):*\n{souffle_report}\n\n"
+                 f"2. *Details of the Triggering Transaction:*\n{transaction_details}\n\n"
+                 f"3. *Verification Data A - Sender's Transaction History:*\n{list_transaction}\n\n"
+                 f"4. *Verification Data B - Median Gas in Neighbouring Blocks:*\n{list_median}\n\n"
+                 f"**Your Task:**\n"
+                 f"Based on all the information provided, your primary task is to verify the technical alert and produce a structured incident report. Follow these specific verification instructions:\n\n"
+                 f"- **If the Technical Report indicates a `HighValueDeposit` violation**, your verification **must focus on Verification Data A (Sender's Transaction History)**. Analyze this history to determine if a transaction of this magnitude is normal for this specific sender or if it's a significant outlier. A high-value transfer from a historically high-volume address is less suspicious than one from a new or typically low-volume address.\n\n"
+                 f"- **If the Technical Report indicates a `HighGasPrice` violation**, your verification **must focus on Verification Data B (Median Gas in Neighbouring Blocks)**. Analyze this data to determine if the high gas price is an isolated spike (more suspicious, could indicate a priority transaction for an exploit) or part of a wider network trend due to congestion (less suspicious).\n\n"
+                 f"- For all cases, consider that `from` and `to` addresses being the same is a common bridging pattern and not automatically suspicious unless other risk factors are present.\n\n"
+                 f"**Write your report using the following strict format:**\n\n"
+                 f"**1. Classification:** (Your decision: *Anomalous* or *Normal*)\n"
+                 f"**2. Incident Summary:** (Explain in simple terms what happened in this transaction.)\n"
+                 f"**3. Potential Risk & Reasoning:** (Explain why this activity is considered risky or not. You **must** reference the specific verification data (`Data A` or `Data B`) in your reasoning to justify your classification.)\n"
+                 f"**4. Recommended Action:** (Provide one concrete, immediate step for the operator.)")
         
         response = llm_client.chat.completions.create(
             model="gpt-4o-mini",
@@ -104,13 +106,23 @@ def get_list_transaction(address):
         return(resp)
     return 0
 
-def get_median_gas(block):
-    # block = w3_http.eth.get_block('latest', full_transactions=True)
-
-    gas_prices = [tx['gasPrice'] for tx in block.transactions]
+def get_current_median_gas(current_block):
+    gas_prices = [tx['gasPrice'] for tx in current_block.transactions]
     median_gas = statistics.median(gas_prices)
-    # print(f"Median gas price: {w3.from_wei(median_gas, 'gwei')} gwei")
     return median_gas
+
+def get_median_gas_list(current_block):
+    start_block = current_block - 5
+    end_block = current_block + 5
+
+    median_gas_list = []
+
+    for block_number in range(start_block, end_block + 1):
+        median_gas = get_current_median_gas(block_number)
+        if median_gas is not None:
+            median_gas_list.append(median_gas)
+
+    return median_gas_list
 
 def analyze_with_souffle(fact_string, event_name, args, enriched_data):
     print(f"   [INFO] Analyzing fact...")
@@ -238,13 +250,14 @@ def on_message(ws, message):
 
             block_number = log_data_raw.get('blockNumber')
             block_details = w3_http.eth.get_block(block_number, full_transactions=True)
-            median_gas = get_median_gas(block_details)
+            median_gas = get_current_median_gas(block_details)
 
             enriched_data = {
                 "timestamp": block_details['timestamp'],
                 "gasPrice": transaction_details['gasPrice'],
                 "nonce": transaction_details['nonce'],
-                "medianGas": median_gas
+                "medianGas": median_gas,
+                "block": block_number
             }
 
             print("  [INFO] Investigating transaction details...")
