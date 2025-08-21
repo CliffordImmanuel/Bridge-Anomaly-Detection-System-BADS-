@@ -25,4 +25,4 @@ HighValueEthDeposit(from, to, amount) :-
 
 HighGasPrice(gasPrice, medianGas) :-
     ETHDepositInitiated(_, _, _, _, _, gasPrice, _, medianGas),
-    gasPrice > medianGas.
+    gasPrice > 3 * medianGas.
