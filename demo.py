@@ -124,6 +124,7 @@ def analyze_with_souffle(fact_string, event_name, args, enriched_data):
 
         if result.stdout.strip():
             report_items = []
+            triggered_rules = []
 
             tables = result.stdout.strip().split('---------------')
 
@@ -140,6 +141,7 @@ def analyze_with_souffle(fact_string, event_name, args, enriched_data):
                     
                     if data_rows and "===" not in data_rows[0]:
                         report = f"\n   Triggered Rule: {rule_name}\n   --- Violation Details ---"
+                        has_violation_output = False
                         
                         for row in data_rows:
                             if not row.strip() or "===" in row:
@@ -158,19 +160,27 @@ def analyze_with_souffle(fact_string, event_name, args, enriched_data):
                                     report += (f"\n     - Timestamp: {ts_readable}"
                                                f"\n     - Gas Price: {gas_gwei:.2f} Gwei"
                                                f"\n     - Nonce: {enriched_data['nonce']}")
+                                has_violation_output = True
                             elif rule_name == "HighGasPrice" and len(parts) == 2:
                                 gas_price_str, median_gas_str = parts
                                 gas_gwei = Web3.from_wei(int(float(gas_price_str)), 'gwei')
                                 median_gwei = Web3.from_wei(int(float(median_gas_str)), 'gwei')
                                 report += (f"\n     - Gas Price: {gas_gwei:.2f} Gwei"
-                                           f"\n     - Median Gas: {median_gwei:.2f} Gwei")
-                        report_items.append(report)
+                                           f"\n     - Median Gas (x3): {median_gwei * 3:.2f} Gwei")
+                                has_violation_output = True
+                        # report_items.append(report)
+                        if has_violation_output:
+                            triggered_rules.append(rule_name)
+                            report_items.append(report)
             
             if report_items:
+                rules_summary = ", ".join(triggered_rules)
                 llm_report = get_llm_report(event_name, args, enriched_data, report_items)
 
                 print("\n" + "="*30)
                 print("🚨 INCIDENT REPORT (FROM LLM) 🚨")
+                print(f"     Rules Triggered: {rules_summary}")
+
                 amount_eth = Web3.from_wei(args['amount'], 'ether')
                 print(f"     - From: {args['from']}")
                 print(f"     - To:   {args['to']}")
@@ -209,8 +219,10 @@ def print_normal_transaction(event_name, args, enriched_data):
     if enriched_data:
         ts_readable = datetime.fromtimestamp(enriched_data['timestamp']).strftime('%Y-%m-%d %H:%M:%S UTC')
         gas_gwei = Web3.from_wei(enriched_data['gasPrice'], 'gwei')
+        median_gas_gwei = Web3.from_wei(int(float(enriched_data['medianGas'])), 'gwei')
         print(f"     - Timestamp: {ts_readable}")
         print(f"     - Gas Price: {gas_gwei:.2f} Gwei")
+        print(f"     - Median Gas: {median_gas_gwei:.2f} Gwei")
         print(f"     - Nonce: {enriched_data['nonce']}")
     print("\n" + "="*30 + "\n")
 
