@@ -1,136 +1,126 @@
-BridgeGuard: Sistem Deteksi Anomali Real-Time untuk Cross-Chain Bridge
-BridgeGuard adalah sebuah sistem prototipe yang dirancang untuk memantau aktivitas di cross-chain bridge secara real-time dan mendeteksi transaksi yang berpotensi berbahaya atau anomali. Sistem ini menggabungkan kecepatan pemantauan WebSocket dengan kekuatan analisis logika deklaratif menggunakan Datalog dan Souffle, serta diperkaya dengan analisis laporan insiden oleh Large Language Model (LLM).
+# 🛡️ Bridge Anomaly Detection System (BADS)
 
-Proyek ini terinspirasi dari penelitian akademis XChainWatcher, namun difokuskan pada aplikasi real-time alih-alih analisis historis.
+**BADS** is a prototype system designed to monitor activity on cross-chain bridges **in real-time** and detect potentially malicious or anomalous transactions.  
+This system combines the speed of WebSocket monitoring with the analytical power of declarative logic using **Datalog** and **Soufflé**, further enhanced by incident report analysis from a **Large Language Model (LLM)**.  
 
-Fitur Utama
-Pemantauan Real-Time: Terhubung langsung ke node Ethereum melalui WebSocket untuk mendapatkan data event dengan latensi minimal.
+> 📖 **Inspired by the academic research XChainWatcher**. BADS extends this idea by integrating an LLM for incident reporting and anomaly verification, focusing on actionable insights and reduced false positives.
 
-Analisis Logika Deklaratif: Menggunakan Datalog dan engine Souffle untuk menerapkan aturan keamanan yang kompleks dan mudah dimodifikasi tanpa harus mengubah kode Python.
+---
 
-Deteksi Anomali: Aturan bawaan untuk mendeteksi transaksi bernilai tinggi (HighValueEthDeposit) dan interaksi dengan token spesifik. Aturan dapat dengan mudah diperluas untuk mendeteksi pola lain.
+## ✨ Key Features
 
-Pengayaan Data (Data Enrichment): Secara otomatis mengambil data kontekstual tambahan (seperti timestamp dan gasPrice) melalui koneksi HTTP untuk analisis yang lebih mendalam.
+- ⚡ **Real-Time Monitoring**: Connects directly to an Ethereum node via WebSocket to receive event data with minimal latency.  
+- 🧠 **Declarative Logic Analysis**: Utilizes Datalog and the Soufflé engine to apply complex security rules that can be easily modified without changing the core Python code.  
+- 🎯 **Anomaly Detection**: Comes with built-in rules to detect high-value transactions (*HighValueEthDeposit*) and interactions with specific tokens. The rulebook can be easily extended.  
+- 🔗 **Data Enrichment**: Automatically fetches additional contextual data (e.g., timestamp and gasPrice) via HTTP for more in-depth analysis.  
+- 🤖 **Intelligent Reporting (LLM)**: Integrates analysis results with an LLM to generate human-readable incident reports and verify whether detected anomalies are genuine, helping reduce false positives.
 
-Pelaporan Cerdas (LLM): (Opsional) Mengintegrasikan hasil analisis dengan LLM (OpenAI/GPT) untuk menghasilkan laporan insiden yang mudah dibaca dan dipahami oleh manusia.
+---
 
-Arsitektur Sistem
-Sistem ini terdiri dari beberapa lapisan yang bekerja secara berurutan:
+## 🏗️ System Architecture
 
-Lapisan Sumber Data (Data Source):
+1. **Data Source Layer**  
+   - **Node Provider**: Infura  
+   - **Network**: Ethereum Mainnet / Sepolia (testing)  
 
-Penyedia Node: Infura
+2. **Collection & Processing Layer (Fact Extractor)**  
+   - **Component**: `realtime_monitor.py`  
+   - **Task**: Establishes a persistent WebSocket connection, listens for events (`ETHDepositInitiated`, `ERC20DepositInitiated`), performs data enrichment via HTTP, and converts raw data into clean, structured Datalog facts.  
 
-Jaringan: Ethereum Mainnet (atau Sepolia untuk pengujian)
+3. **Analysis Layer (Analysis Engine)**  
+   - **Component**: Soufflé Datalog Engine + `realtime_rules.dl`  
+   - **Task**: Evaluates facts against the rulebook. If a rule is matched, Soufflé generates a violation output.  
 
-Lapisan Pengumpulan & Pemrosesan (Fact Extractor):
+4. **Presentation Layer**  
+   - **Component**: `realtime_monitor.py`  
+   - **Task**: Displays a security alarm if a violation is detected and uses the LLM to verify whether the detected anomaly is genuine, also it requests a more detailed incident report or logs a normal transaction report. 
 
-Komponen: realtime_monitor.py
+---
 
-Tugas: Membuat koneksi WebSocket yang persisten, mendengarkan event (ETHDepositInitiated, ERC20DepositInitiated), melakukan pengayaan data via HTTP, dan mengubah data mentah menjadi fakta Datalog yang bersih dan terstruktur.
+## ✅ Prerequisites
 
-Lapisan Analisis (Analysis Engine):
+- Windows 10/11 with WSL 2  
+- Ubuntu 22.04 LTS (inside WSL)  
+- [Soufflé Datalog Engine](https://souffle-lang.github.io/)  
+- Python **3.11.9** (recommended via `pyenv`)  
+- Git  
+- API Keys:
+  - Infura Project ID  
+  - OpenAI API Key  
 
-Komponen: Souffle Datalog Engine & realtime_rules.dl
+---
 
-Tugas: Menerima fakta dari skrip Python dan mengevaluasinya terhadap "buku panduan investigasi" (realtime_rules.dl). Jika ada aturan yang cocok, Souffle akan menghasilkan output pelanggaran.
+## ⚙️ Installation
 
-Lapisan Presentasi (Presentation Layer):
+Run all commands inside your **Ubuntu 22.04 (WSL)** terminal.
 
-Komponen: realtime_monitor.py
-
-Tugas: Menangkap output dari Souffle. Jika ada pelanggaran, sistem akan menampilkan alarm keamanan. Jika tidak, sistem akan menampilkan laporan transaksi normal. Jika terintegrasi dengan LLM, sistem akan meminta laporan insiden yang lebih detail.
-
-Prasyarat
-Sebelum memulai, pastikan sistem Anda memiliki perangkat lunak berikut:
-
-Windows 10/11 dengan WSL 2.
-
-Distribusi Ubuntu 22.04 LTS di dalam WSL.
-
-Souffle Datalog Engine.
-
-Python 3.11.9 (sangat direkomendasikan untuk di-install melalui pyenv).
-
-Git.
-
-API Keys:
-
-Project ID dari Infura.
-
-(Opsional) API Key dari OpenAI jika Anda ingin menggunakan fitur LLM.
-
-Instalasi (Panduan untuk Pengguna Baru)
-Jalankan semua perintah ini di dalam terminal Ubuntu 22.04 (WSL).
-
-1. Clone Repositori
-
-git clone https://github.com/URL-ANDA/NAMA-REPO-ANDA.git
-cd NAMA-REPO-ANDA
-
-2. Instalasi Peralatan Sistem (Souffle & Dependensi Build)
-
-# 1. Update dan install prasyarat dasar
+### 1. Clone the Repository
+```bash
+git clone https://github.com/YOUR-USERNAME/YOUR-REPOSITORY-NAME.git
+cd YOUR-REPOSITORY-NAME
+```
+### 2. Install System Tools (Soufflé & Build Dependencies)
+```bash
 sudo apt update
-sudo apt install -y software-properties-common wget gpg build-essential libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev curl llvm libncurses5-dev libncursesw5-dev xz-utils tk-dev libffi-dev liblzma-dev git
+sudo apt install -y software-properties-common wget gpg build-essential \
+  libssl-dev zlib1g-dev libbz2-dev libreadline-dev curl llvm \
+  libncurses5-dev libncursesw5-dev xz-utils tk-dev libffi-dev liblzma-dev git
 
-# 2. Tambahkan repositori Souffle dan install
-wget -qO- "https://souffle-lang.github.io/ppa/souffle-key.public" | sudo gpg --dearmor -o /usr/share/keyrings/souffle-archive-keyring.gpg
-echo "deb [signed-by=/usr/share/keyrings/souffle-archive-keyring.gpg] https://souffle-lang.github.io/ppa/ubuntu/ stable main" | sudo tee /etc/apt/sources.list.d/souffle.list
+wget -qO- "https://souffle-lang.github.io/ppa/souffle-key.public" \
+  | sudo gpg --dearmor -o /usr/share/keyrings/souffle-archive-keyring.gpg
+
+echo "deb [signed-by=/usr/share/keyrings/souffle-archive-keyring.gpg] \
+https://souffle-lang.github.io/ppa/ubuntu/ stable main" \
+  | sudo tee /etc/apt/sources.list.d/souffle.list
+
 sudo apt update
 sudo apt install souffle -y
-
-3. Instalasi Python dengan pyenv (Sangat Direkomendasikan)
-
-# 1. Install pyenv
+```
+### 3. Install Python via pyenv
+```bash
 curl https://pyenv.run | bash
 
-# 2. Konfigurasi pyenv dan muat ulang terminal
+# Add configuration to .bashrc
 echo 'export PYENV_ROOT="$HOME/.pyenv"' >> ~/.bashrc
 echo 'command -v pyenv >/dev/null || export PATH="$PYENV_ROOT/bin:$PATH"' >> ~/.bashrc
 echo 'eval "$(pyenv init -)"' >> ~/.bashrc
 exec "$SHELL"
 
-# 3. Install Python 3.11.9 (Proses ini akan memakan waktu lama)
 pyenv install 3.11.9
 pyenv global 3.11.9
-
-4. Setup Lingkungan Proyek
-
-# 1. Buat virtual environment
+```
+### 4. Set Up Virtual Environment
+```bash
 python -m venv venv
-
-# 2. Aktifkan virtual environment
 source venv/bin/activate
-
-# 3. Install semua pustaka Python yang dibutuhkan
 pip install -r requirements.txt
+```
 
-Konfigurasi
-Buat File .env
-Salin file .env.example dan beri nama .env.
+---
 
+## 🔧 Configuration
+Create the .env file from the example:
+
+
+### 1. Create the .env file from the example:
+``` bash
 cp .env.example .env
+```
+### 2. Fill in your API keys:
+``` bash
+INFURA_PROJECT_ID="your_infura_project_id_here"
+OPENAI_API_KEY="your_openai_api_key_here" 
+``` 
+### 3. Open realtime_rules.dl to adjust detection thresholds or add new rules.
 
-Isi Variabel Environment
-Buka file .env dan isi dengan kunci API Anda.
+---
 
-INFURA_PROJECT_ID="project_id_anda_dari_infura"
-OPENAI_API_KEY="api_key_anda_dari_openai" # Hanya jika menggunakan LLM
+## 🚀 Usage
+Every time you open a new terminal, activate the virtual environment and run the monitor:
 
-Konfigurasi Aturan (realtime_rules.dl)
-Buka file realtime_rules.dl untuk melihat dan memodifikasi aturan deteksi. Anda bisa mengubah ambang batas amount atau menambahkan aturan baru di sini.
-
-Penggunaan
-Setiap kali Anda membuka terminal baru, jangan lupa untuk mengaktifkan virtual environment terlebih dahulu!
-
-# Pindah ke direktori proyek (jika perlu)
-cd /path/ke/proyek/anda
-
-# Aktifkan environment
+``` bash
+cd /path/to/your/project
 source venv/bin/activate
-
-# Jalankan skrip monitor utama
 python realtime_monitor.py
-
-Skrip akan berjalan dan mulai memonitor transaksi. Output akan muncul di terminal saat ada event baru yang terdeteksi.
+```
+The script will start monitoring transactions and display output in the terminal as new events are detected.
